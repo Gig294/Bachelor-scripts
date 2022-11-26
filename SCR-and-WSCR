@@ -1,0 +1,175 @@
+import win32com
+import time
+import math
+import powerfactory as pf
+import time
+from datetime import datetime
+
+#start PowerFactory in non-interactive mode
+app = pf.GetApplication()
+from win32com import client
+excel=client.Dispatch("Excel.Application")
+excel.visible=True
+
+#Excel document assigned and located
+wb = excel.Workbooks.Open(r'insert directory of excel file')
+
+SetTime = app.GetStudyTimeObject()
+
+#Load Flow Test
+##ldf=app.GetFromStudyCase("ComLdf")
+
+#Short Circuit Test
+shc=app.GetFromStudyCase("ComShc")
+#Method
+shc.iopt_mde=1
+#Fault Type
+shc.iopt_shc="3psc"#"3psc"
+#Min max calculate
+shc.iopt_cur=1
+
+#Busbars and its region are exported from excel file and saved to arrays
+#############################################
+Loc=[]
+Term=[]
+wsInfo=wb.Worksheets[0]
+
+busInfoLen=str(int(wsInfo.Cells(1,1).Value+4))
+
+loc=wsInfo.Range("A5","A"+busInfoLen).Value
+term=wsInfo.Range("B5","B"+busInfoLen).Value
+
+for lo in loc:
+    for l in lo:
+        Loc.append(int(l))
+for ter in term:
+    for te in ter:
+        Term.append(str(te))
+#############################################
+
+#Main function for calculating short-circuit ratio
+#############################################
+def WSCR_function(sheetIndex:int,year:int,power:int,location:int,years:int,tech:int,n:int,BB):#,listLength:int):
+    ws=wb.Worksheets[sheetIndex]
+
+    
+    #Operation Scenarios
+    FoldOperScens=app.GetProjectFolder('scen').GetContents()
+    OpScen=[]
+    for OperScens in FoldOperScens:
+        if OperScens.loc_name=="Low Load":
+            for Scens in OperScens.GetContents():
+                for Scen in Scens.GetContents():
+                    if Scen.loc_name[0:4]==year and Scen.loc_name[10:13]=="Max":
+                        OpScen.append(Scen)
+
+    if 1==1:
+
+        #Datetime set
+        dt=datetime(int(year),12,31,23,59)
+        setattr(SetTime,"datetime",int(dt.timestamp()))
+
+        TermObj=[]
+        #All busbars found
+        TermObject=app.GetCalcRelevantObjects("BB*.ElmTerm")
+        for Obj in TermObject:
+            
+            #Certain busbars gets picked out
+            if (getattr(Obj,"e:cDisplayName")== "3SD60\BB1" or
+                getattr(Obj,"e:cDisplayName")== "EI60\BB1" or
+                getattr(Obj,"e:cDisplayName")== "SA60\BB1" or
+                getattr(Obj,"e:cDisplayName")== "ST60\BB1" or
+                getattr(Obj,"e:cDisplayName")== "VN60\BB1" or
+                getattr(Obj,"e:cDisplayName")== "RV60\BB" or
+                getattr(Obj,"e:cDisplayName")== "HR60\BB"):
+
+                
+                TermObj.append(Obj)
+                
+        listToExcel=[]
+        
+        for i in range(len(OpScen)):
+            listToExcel_1=[]
+            
+            OpScen[i].Activate()
+            
+            
+            for j in range(len(TermObj)):
+
+                listToExcel_2=[]    
+                #Write busbar names
+                listToExcel_2.append(TermObj[j].GetAttribute("e:cDisplayName"))
+                listToExcel_2.append(years)
+                listToExcel_2.append(OpScen[i].fold_id.fold_id.loc_name)
+                listToExcel_2.append(OpScen[i].loc_name)
+                listToExcel_2.append(tech)
+                    
+
+                for locindex in range(len(Term)):
+                    
+                    if TermObj[j].GetAttribute("e:cDisplayName")==Term[locindex]:
+                        listToExcel_2.append(Loc[locindex])
+                        break
+
+                write(BB)
+                write(TermObj[j].GetAttribute("e:cDisplayName"))
+                
+                if Loc[locindex] == location:     
+                    setattr(shc, 'shcobj', TermObj[j])
+                    shc.Execute()
+                    
+                    listToExcel_2.append(power)
+
+                    try:
+                        listToExcel_2.append(getattr(TermObj[j], 'm:Skss'))#:B'))
+                        
+                    except AttributeError:
+                        listToExcel_2.append("")
+                else:
+                    listToExcel_2.append("")
+                    listToExcel_2.append("")
+                    
+                listToExcel_1.append(listToExcel_2)
+            listToExcel.extend(listToExcel_1)
+
+    return listToExcel
+#############################################
+
+
+#List to insert into main function
+#############################################
+years=["2022","2022","2024","2026","2027","2028","2029","2030","2030","2030"]
+checkYears=["2021","2021","2023","2025","2026","2027","2028","2029","2029","2029"]
+tech=["WP","WP","WP","WP","WP","WP","PV","WP","PV","PV"]
+power=[24,18,18,18,18,30,22,18,39,3]
+location=[5,5,6,6,1,6,4,5,4,6]
+BB=["3SD60\BB1","HR60\BB","SA60\BB1","SA60\BB1","VN60\BB1","SA60\BB1","ST60\BB1","RV60\BB","ST60\BB1","SA60\BB1"]
+#############################################
+
+#Main function is called and exports the result to a list
+#############################################
+listExcel=[]
+for n in range(0,len(checkYears)):
+    listEx=WSCR_function(1,checkYears[n],power[n],location[n],years[n],tech[n],n,BB[n])
+    listExcel.extend(listEx)
+#############################################
+
+#The results are printed to the the correct Excel sheet
+#############################################
+for sheet in wb.Sheets:
+    if sheet.Name=="Data SCR - WSCR":
+        dataIndex=sheet.Index-1
+
+wsData=wb.Worksheets[dataIndex]
+wsData.Cells.ClearContents()
+
+cols=['Busbar','Year','High/Low','Scenario','Technology','Location','Rated Power [MW]','Short-Circuit [MW]','Compensation']
+wsData.Range("B4","J4").Value=cols
+wsData.Range("B5",wsData.Cells(5+len(listExcel)-1,9)).Value=listExcel
+wsData.Cells(5,10).FormulaR1C1="""=IFS(RIGHT(RC[-5],4)=\"Comp\",\"SD (S2)\",
+RIGHT(RC[-5],6)=\"Comp 2\",\"SD+SA (S3)\",RIGHT(RC[-5],6)=\"Comp 3\",\"SD+SA+ST (S4)\",
+RIGHT(RC[-5],6)=\"Comp 4\",\"SD+SA+ST+EI (S5)\",RIGHT(RC[-5],4)=\"inv.\",\"None (S1)\",
+RIGHT(RC[-5],6)=\"Comp 5\",\"SD+SA+ST+2xSD+1xEI (S6)\",RIGHT(RC[-5],6)=\"Comp 6\",
+\"SD+SA+ST+EI+2xSD (S7)\")"""
+wsData.Range("J5",wsData.Cells(5+len(listExcel)-1,10)).FillDown()
+#############################################
